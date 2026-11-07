@@ -1,0 +1,96 @@
+# The whole detection-and-response pipeline on one isolated Docker network.
+#
+#   scanner ──scan──► target ◄── sensor (Suricata on the target's interface)
+#                                   │ signed webhook
+#   logs  ── signed webhook ──►  soar (SOAR-Lite) ◄── signed webhook ── email
+#
+# Each project is built from its GitHub release, so the lab runs exactly the
+# published code. Start it with ./lab.sh (which creates the webhook secret).
+
+name: soc-lab
+
+x-secret: &secret ${WEBHOOK_SECRET:?Run ./lab.sh, or create .env with WEBHOOK_SECRET=<random value>}
+
+networks:
+  lab:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+services:
+  # ── Respond ─────────────────────────────────────────────────────
+  soar:
+    build: https://github.com/AhmedDAH1/soar-lite.git#v2.0.0
+    environment:
+      WEBHOOK_SECRET: *secret
+    ports:
+      - "127.0.0.1:8000:8000"     # dashboard, on your machine only
+    networks:
+      lab:
+        ipv4_address: 172.28.0.30
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # ── The network being scanned, and the sensor watching it ──────
+  target:
+    build: ./target
+    networks:
+      lab:
+        ipv4_address: 172.28.0.10
+
+  sensor:
+    build: ./sensor
+    network_mode: "service:target"   # sees every packet to and from the target
+    cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
+    environment:
+      SOAR_URL: http://soar:8000
+      SOAR_WEBHOOK_SECRET: *secret
+    depends_on:
+      target:
+        condition: service_started
+      soar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "grep", "-q", "Engine started", "/var/log/suricata/suricata.log"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  # ── Attack ──────────────────────────────────────────────────────
+  scanner:
+    build: https://github.com/AhmedDAH1/network-scanner.git#v2.3.0
+    command: ["python3", "scanner_cli.py", "-t", "172.28.0.10", "-p", "1-100", "--vuln", "--no-api"]
+    cap_add: [NET_RAW, NET_ADMIN]    # raw packets; never --privileged
+    networks:
+      lab:
+        ipv4_address: 172.28.0.20
+    depends_on:
+      sensor:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Detect: the other two tools, on their bundled sample data ──
+  logs:
+    build: https://github.com/AhmedDAH1/log_threat_detector.git#v1.2.0
+    command: ["--all", "--severity", "HIGH", "--forward", "http://soar:8000"]
+    environment:
+      SOAR_WEBHOOK_SECRET: *secret
+    networks: [lab]
+    depends_on:
+      soar:
+        condition: service_healthy
+    restart: "no"
+
+  email:
+    build: https://github.com/AhmedDAH1/email-threat-analyzer.git#v1.2.0
+    command: ["python3", "main.py", "samples/phishing_test.eml", "--forward", "http://soar:8000"]
+    environment:
+      SOAR_WEBHOOK_SECRET: *secret
+    networks: [lab]
+    depends_on:
+      soar:
+        condition: service_healthy
+    restart: "no"

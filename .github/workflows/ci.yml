@@ -1,0 +1,28 @@
+name: CI
+
+# Runs the whole lab on every push and checks every incident arrives in
+# SOAR-Lite, so a change in any of the four projects that breaks the
+# pipeline is caught here.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"   # weekly, to catch breakage from upstream images
+
+jobs:
+  lab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run the lab end to end
+        run: ./lab.sh
+
+      - name: Show logs if it failed
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v
