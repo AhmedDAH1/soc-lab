@@ -1,0 +1,33 @@
+# The SOC's own records, given to the AI as trusted context when it triages an
+# incident (app/services/soc_context.py). An attacker can write an alert's
+# text, but not this file: under strict mode the AI can only dismiss an alert
+# by citing a record from here.
+#
+# Records are looked up by the incident's IP addresses and email domains.
+# Their names match ai-alert-triage's evidence records: asset, allowlist,
+# change_ticket, schedule, helpdesk, directory, known_senders.
+
+org_domain: example.org
+
+by_ip:
+  10.0.4.15:
+    asset:
+      hostname: backup-01
+      role: Backup server; runs the nightly rsync over SSH as user 'backup'
+      owner: infrastructure team
+    change_ticket: "CHG-1042 (8 Nov): the 'backup' account's SSH password was rotated; the nightly job still uses the old one until it is updated"
+  10.0.9.20:
+    asset:
+      hostname: uptime-01
+      role: Uptime monitor; requests the website every 30 seconds with python-requests
+      owner: platform team
+  10.0.5.20:
+    asset:
+      hostname: vuln-scan-01
+      role: The organisation's vulnerability scanner (authenticated weekly scans)
+      owner: security team
+    schedule: Weekly scan of 10.0.0.0/16, Sundays 01:00-04:00
+
+by_domain:
+  github.com:
+    known_senders: GitHub notifications; the development team uses GitHub

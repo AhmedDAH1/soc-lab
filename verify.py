@@ -1,6 +1,7 @@
 """
 Check that the pipeline worked end to end: wait until SOAR-Lite holds an
-incident from every tool, then print them.
+incident from every tool, then upload SOAR-Lite's demo logs and emails
+through "Analyze logs" and check they became incidents.
 
     python3 verify.py [--timeout SECONDS] [--url http://localhost:8000]
 
@@ -27,6 +28,38 @@ EXPECTED = [
 def get(url):
     with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 - local lab URL
         return json.load(response)
+
+
+def post(url, payload, timeout=120):
+    request = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - local lab URL
+        return json.load(response)
+
+
+def check_analyze(url, deadline):
+    """Upload the demo files the way the Analyze page does; both detection APIs must answer."""
+    status = {}
+    while time.time() < deadline:
+        try:
+            status = get(f"{url}/api/analyze/status")
+            if status["logs"]["up"] and status["email"]["up"]:
+                break
+        except OSError:
+            pass
+        time.sleep(3)
+    samples = get(f"{url}/api/analyze/samples")
+    result = post(f"{url}/api/analyze/", {"files": samples})
+    titles = [i["title"] for i in result["incidents"]]
+    checks = [
+        ("Analyze logs: brute force + port scan correlated", any("COORDINATED_ATTACK" in t for t in titles)),
+        ("Analyze logs: phishing emails opened incidents", sum("[EMAIL_GATEWAY]" in t for t in titles) == 2),
+    ]
+    for label, ok in checks:
+        print(f"  {'✓' if ok else '✗'} {label:<48} {len(titles)} incidents from {len(samples)} files")
+    ai = status.get("ai", {})
+    print(f"  · AI triage: {ai.get('model') + ' (' + ai.get('mode', '') + ' mode)' if ai.get('configured') else 'off (see README to turn it on)'}")
+    return all(ok for _, ok in checks)
 
 
 def main():
@@ -62,8 +95,9 @@ def main():
     iocs = [ioc["value"] for ioc in get(f"{args.url}/api/incidents/{netscan['id']}")["iocs"]]
     found = SCANNER_IP in iocs
     print(f"  {'✓' if found else '✗'} {'Scanner address ' + SCANNER_IP + ' extracted as an IOC':<48}")
-    print(f"\n{len(incidents)} incidents in SOAR-Lite.")
-    return 0 if found else 1
+    analyzed = check_analyze(args.url, deadline)
+    print(f"\n{len(get(f'{args.url}/api/incidents/?limit=500'))} incidents in SOAR-Lite.")
+    return 0 if found and analyzed else 1
 
 
 if __name__ == "__main__":

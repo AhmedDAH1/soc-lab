@@ -3,6 +3,10 @@
 #   scanner ──scan──► target ◄── sensor (Suricata on the target's interface)
 #                                   │ signed webhook
 #   logs  ── signed webhook ──►  soar (SOAR-Lite) ◄── signed webhook ── email
+#                                   │
+#        "Analyze logs" uploads ────┤──► logs-api  (Log Threat Detector)
+#                                   └──► email-api (Email Threat Analyzer)
+#   Every incident then goes to AI triage, when a model is configured (README).
 #
 # Each project is built from its GitHub release, so the lab runs exactly the
 # published code. Start it with ./lab.sh (which creates the webhook secret).
@@ -20,9 +24,23 @@ networks:
 services:
   # ── Respond ─────────────────────────────────────────────────────
   soar:
-    build: https://github.com/AhmedDAH1/soar-lite.git#v2.0.0
+    build: https://github.com/AhmedDAH1/soar-lite.git#v3.0.0
     environment:
       WEBHOOK_SECRET: *secret
+      LOG_ANALYZER_URL: http://logs-api:5001
+      EMAIL_ANALYZER_URL: http://email-api:8000
+      # AI triage: off unless set, in .env or exported in your shell (README).
+      # The key is read from the environment and never written by the lab.
+      TRIAGE_PROVIDER: ${TRIAGE_PROVIDER:-}
+      TRIAGE_BASE_URL: ${TRIAGE_BASE_URL:-}
+      TRIAGE_MODEL: ${TRIAGE_MODEL:-}
+      TRIAGE_API_KEY: ${TRIAGE_API_KEY:-}
+      TRIAGE_MODE: ${TRIAGE_MODE:-strict}
+    volumes:
+      # The SOC's own records the AI may cite: edit this file to describe your network
+      - ./soc_context.yml:/app/soc_context.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach Ollama running on your computer
     ports:
       - "127.0.0.1:8000:8000"     # dashboard, on your machine only
     networks:
@@ -72,9 +90,22 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # ── Analyze: the detection tools' HTTP APIs, for uploaded files ─
+  logs-api:
+    build: https://github.com/AhmedDAH1/log_threat_detector.git#v1.3.0
+    entrypoint: ["python3", "analysis_api.py"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "5001"
+    networks: [lab]
+
+  email-api:
+    build: https://github.com/AhmedDAH1/email-threat-analyzer.git#v1.3.0
+    networks: [lab]
+
   # ── Detect: the other two tools, on their bundled sample data ──
   logs:
-    build: https://github.com/AhmedDAH1/log_threat_detector.git#v1.2.0
+    build: https://github.com/AhmedDAH1/log_threat_detector.git#v1.3.0
     command: ["--all", "--severity", "HIGH", "--forward", "http://soar:8000"]
     environment:
       SOAR_WEBHOOK_SECRET: *secret
@@ -85,7 +116,7 @@ services:
     restart: "no"
 
   email:
-    build: https://github.com/AhmedDAH1/email-threat-analyzer.git#v1.2.0
+    build: https://github.com/AhmedDAH1/email-threat-analyzer.git#v1.3.0
     command: ["python3", "main.py", "samples/phishing_test.eml", "--forward", "http://soar:8000"]
     environment:
       SOAR_WEBHOOK_SECRET: *secret

@@ -14,5 +14,9 @@ docker compose up --build -d
 echo "Waiting for the scan, the detections and the incidents..."
 python3 verify.py
 echo
-echo "Dashboard: http://localhost:8000    Scanner output: docker compose logs scanner"
+echo "Dashboard:    http://localhost:8000"
+echo "Analyze logs: http://localhost:8000/analyze   (upload your own logs and emails)"
+if [ -z "${TRIAGE_PROVIDER}${TRIAGE_BASE_URL}" ] && ! grep -qE '^TRIAGE_(PROVIDER|BASE_URL)=.+' .env 2>/dev/null; then
+    echo "AI triage is off. See \"AI triage\" in README.md to turn it on."
+fi
 echo "Stop with: docker compose down"
