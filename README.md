@@ -146,7 +146,7 @@ docker compose down               # stop everything (incidents are discarded)
 | `email` | [email-threat-analyzer](https://github.com/AhmedDAH1/email-threat-analyzer) | v1.3.0 | A phishing verdict on its sample email |
 | `logs-api` | log_threat_detector's analysis API | v1.3.0 | Analyses uploaded logs |
 | `email-api` | email-threat-analyzer's web API | v1.3.0 | Analyses uploaded emails |
-| `soar` | [soar-lite](https://github.com/AhmedDAH1/soar-lite) | v3.0.1 | Incidents, IOCs, AI triage, enrichment, playbooks, reports |
+| `soar` | [soar-lite](https://github.com/AhmedDAH1/soar-lite) | v3.1.0 | Incidents, IOCs, AI triage, enrichment, playbooks, reports |
 | (bundled) | [ai-alert-triage](https://github.com/AhmedDAH1/ai-alert-triage) | v0.2.3 | The AI triage engine, bundled in SOAR-Lite |
 
 The same Sigma rules, with their test data, are in

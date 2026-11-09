@@ -24,7 +24,7 @@ networks:
 services:
   # ── Respond ─────────────────────────────────────────────────────
   soar:
-    build: https://github.com/AhmedDAH1/soar-lite.git#v3.0.1
+    build: https://github.com/AhmedDAH1/soar-lite.git#v3.1.0
     environment:
       WEBHOOK_SECRET: *secret
       LOG_ANALYZER_URL: http://logs-api:5001
