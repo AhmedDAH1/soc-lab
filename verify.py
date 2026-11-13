@@ -49,7 +49,7 @@ def check_analyze(url, deadline):
             pass
         time.sleep(3)
     samples = get(f"{url}/api/analyze/samples")
-    result = post(f"{url}/api/analyze/", {"files": samples})
+    result = post(f"{url}/api/analyze/", {"files": samples, "triage": False})   # a check, not a demo: no AI calls
     titles = [i["title"] for i in result["incidents"]]
     checks = [
         ("Analyze logs: brute force + port scan correlated", any("COORDINATED_ATTACK" in t for t in titles)),

@@ -24,7 +24,7 @@ networks:
 services:
   # ── Respond ─────────────────────────────────────────────────────
   soar:
-    build: https://github.com/AhmedDAH1/soar-lite.git#v3.1.0
+    build: https://github.com/AhmedDAH1/soar-lite.git#v3.2.0
     environment:
       WEBHOOK_SECRET: *secret
       LOG_ANALYZER_URL: http://logs-api:5001
@@ -36,6 +36,9 @@ services:
       TRIAGE_MODEL: ${TRIAGE_MODEL:-}
       TRIAGE_API_KEY: ${TRIAGE_API_KEY:-}
       TRIAGE_MODE: ${TRIAGE_MODE:-strict}
+      # The lab's own startup incidents are not sent to the AI, so starting the lab
+      # costs nothing; files you upload on the Analyze page are. true to change.
+      AUTO_TRIAGE: ${AUTO_TRIAGE:-false}
     volumes:
       # The SOC's own records the AI may cite: edit this file to describe your network
       - ./soc_context.yml:/app/soc_context.yml:ro

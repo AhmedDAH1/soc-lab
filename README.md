@@ -110,6 +110,11 @@ export TRIAGE_BASE_URL=http://host.docker.internal:11434/v1 TRIAGE_MODEL=qwen2.5
 ./lab.sh
 ```
 
+Starting the lab costs nothing: its own startup incidents and its automated
+upload check are not sent to the AI (set `AUTO_TRIAGE=true` to change that).
+Only files you analyse on the Analyze page are, about 9 requests for the demo
+files.
+
 `TRIAGE_MODE` defaults to `strict`, the mode
 [ai-alert-triage](https://github.com/AhmedDAH1/ai-alert-triage#results)
 measured as the hardest to manipulate: alert data is fenced off from the
@@ -146,7 +151,7 @@ docker compose down               # stop everything (incidents are discarded)
 | `email` | [email-threat-analyzer](https://github.com/AhmedDAH1/email-threat-analyzer) | v1.3.0 | A phishing verdict on its sample email |
 | `logs-api` | log_threat_detector's analysis API | v1.3.0 | Analyses uploaded logs |
 | `email-api` | email-threat-analyzer's web API | v1.3.0 | Analyses uploaded emails |
-| `soar` | [soar-lite](https://github.com/AhmedDAH1/soar-lite) | v3.1.0 | Incidents, IOCs, AI triage, enrichment, playbooks, reports |
+| `soar` | [soar-lite](https://github.com/AhmedDAH1/soar-lite) | v3.2.0 | Incidents, IOCs, AI triage, enrichment, playbooks, reports |
 | (bundled) | [ai-alert-triage](https://github.com/AhmedDAH1/ai-alert-triage) | v0.2.3 | The AI triage engine, bundled in SOAR-Lite |
 
 The same Sigma rules, with their test data, are in
