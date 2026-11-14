@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOC Lab live console</title>
+<link rel="stylesheet" href="/console.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2313202E'/%3E%3Cpath d='M2 8h4l2-4 2 8 2-4h2' stroke='%23F2B33D' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="bar">
+  <div class="bar-title">
+    <h1>SOC Lab live console</h1>
+    <p id="mode-line">Connecting to the lab…</p>
+  </div>
+  <nav class="bar-links" aria-label="Lab tools">
+    <a id="soar-link" href="http://localhost:8000" target="_blank" rel="noopener">Open SOAR-Lite</a>
+    <a id="analyze-link" href="http://localhost:8000/analyze" target="_blank" rel="noopener">Analyze your own logs</a>
+  </nav>
+</header>
+
+<div class="notice" id="notice" role="status" hidden></div>
+
+<main>
+  <section class="map" aria-label="The pipeline">
+    <div class="lanes" id="lanes"></div>
+    <aside class="soar" id="soar-box"></aside>
+  </section>
+
+  <section class="detail" id="detail" aria-live="polite"></section>
+</main>
+
+<footer class="foot">
+  <p>Everything on this page is read from the running lab: the tools' own output, the packets on the target's interface, Suricata's alerts and SOAR-Lite's incident API. The console holds no secret and cannot create an incident.</p>
+</footer>
+
+<script src="/console.js"></script>
+</body>
+</html>

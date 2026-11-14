@@ -8,7 +8,8 @@ own logs and emails, and an AI model triages every incident, under rules an
 attacker can't talk it out of:
 
 ```bash
-./lab.sh
+./lab.sh            # run everything and check the result
+./lab.sh --watch    # hold the attacks, start each one yourself and watch it
 ```
 
 ![The lab: NetScan scans a target, Suricata catches it with NetScan's own rules, and the alerts become incidents in SOAR-Lite with the scanner's address as an indicator](assets/soc-lab.gif)
@@ -63,7 +64,46 @@ result:
 20 incidents in SOAR-Lite.
 ```
 
-Then open the dashboard at http://localhost:8000.
+Then open the dashboard at http://localhost:8000, or the live console at
+http://localhost:8080 to see what just happened, step by step.
+
+## Watch it step by step
+
+```bash
+./lab.sh --watch
+```
+
+This starts everything but holds the attacks, and opens the live console at
+**http://localhost:8080**. The console draws the pipeline as four lanes that
+all end in SOAR-Lite. Each lane has its own start button, and the evidence
+appears underneath as it happens:
+
+1. **Scan the network.** NetScan's own output; every packet that reached the
+   target, with the four header values the Suricata rule checks highlighted;
+   each rule broken into its conditions, and the moment it fired; the signed
+   request the sensor sent; the incident SOAR-Lite opened and the indicators
+   it pulled out.
+2. **Replay the attack logs.** Log Threat Detector's findings and the
+   incident each one became.
+3. **Deliver a phishing email.** Email Threat Analyzer's score and its
+   incident.
+4. **Forge an alert.** The console sends SOAR-Lite one alert with no
+   signature and one signed with a guessed secret. Both are refused, and you
+   see the request and the refusal next to each other.
+
+With AI triage on, every incident card has an *Ask the AI* button. It sends
+that one incident to the model and shows the verdict, the reasons and the
+records it cited. Nothing is sent to the model until you press it.
+
+How the console sees all this without being able to change it: each tool
+copies its output to a shared Docker volume, a packet tap in the sensor
+reports the traffic on the target's interface, and the console reads those
+files and SOAR-Lite's incident API. Starting a step means writing a run
+number to a file the waiting tool watches. The console has no access to
+Docker and does not hold the webhook secret, which is why lane 4 fails.
+
+After a plain `./lab.sh`, the same console shows what already happened, and
+any lane can be run again.
 
 ## Analyze your own logs
 
@@ -134,6 +174,7 @@ own network, then `docker compose restart soar`.
 
 ```bash
 ./lab.sh                          # build, start, wait for every incident
+./lab.sh --watch                  # build, start, then you run each step from the live console
 docker compose logs scanner       # NetScan's scan output
 docker compose logs sensor        # Suricata alerts and their forwarding
 docker compose up scanner         # scan again; Suricata alerts once a minute per source
@@ -145,6 +186,7 @@ docker compose down               # stop everything (incidents are discarded)
 
 | Service | Project | Release | Role |
 |---|---|---|---|
+| `console` | this repository | | The live view: every step as it happens, started by you |
 | `scanner` | [network-scanner](https://github.com/AhmedDAH1/network-scanner) | v2.3.0 | Attacker: SYN scan, banners, CVE matching |
 | `sensor` | network-scanner's [detections](https://github.com/AhmedDAH1/network-scanner/tree/main/detections) | v2.3.0 | Suricata rules and the alert forwarder |
 | `logs` | [log_threat_detector](https://github.com/AhmedDAH1/log_threat_detector) | v1.3.0 | Brute force and port scans in its sample logs |
@@ -161,8 +203,14 @@ The same Sigma rules, with their test data, are in
 
 - Every alert is signed with a secret generated on first run and stored in
   `.env` (git-ignored). SOAR-Lite refuses unsigned or tampered alerts.
-- Everything runs on an isolated Docker network. Only the dashboard is
-  published, on `127.0.0.1:8000`.
+- Everything runs on an isolated Docker network. Only the dashboard
+  (`127.0.0.1:8000`) and the live console (`127.0.0.1:8080`) are published,
+  on your machine only.
+- The live console can read what the tools report and can start a step. It
+  has no Docker access and no webhook secret. It only answers requests
+  addressed to `localhost`, and only its own page can start a step, so
+  another website open in your browser can't reach it or trigger a scan.
+  Everything it displays is treated as text an attacker may have written.
 - The scanner and sensor get only the Linux capabilities raw packets need
   (`NET_RAW`, `NET_ADMIN`), never `--privileged`.
 - The scanner targets only the lab's own decoy container.
@@ -170,9 +218,10 @@ The same Sigma rules, with their test data, are in
 ## Testing
 
 CI runs `./lab.sh` on every push and once a week, and fails unless every
-incident above arrives and the demo files uploaded through the Analyze page
-become incidents. It catches a change in any of the projects that breaks the
-pipeline.
+incident above arrives, the demo files uploaded through the Analyze page
+become incidents, and the live console saw the scan, both rules firing, the
+signed alerts and the incidents. It catches a change in any of the projects
+that breaks the pipeline.
 
 ## Troubleshooting
 
@@ -185,6 +234,12 @@ pipeline.
   Ollama, check it is running (`ollama ps`) and that `TRIAGE_BASE_URL` uses
   `host.docker.internal`, not `localhost` (inside a container, `localhost` is
   the container). For a cloud model, check the key and `docker compose logs soar`.
+- **The live console says a step is still starting:** the scanner starts
+  only once Suricata is ready, which takes a few seconds after the first
+  build. `docker compose ps` shows what is up.
+- **Running the scan again opens one incident, not two:** the packet rule
+  reports once per source per minute, so a second scan inside that minute
+  only fires the HTTP rule.
 - **A NetScan incident is missing:** `docker compose logs sensor` shows
   whether Suricata saw the scan and whether SOAR-Lite accepted the alert.
 

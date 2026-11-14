@@ -1,9 +1,11 @@
 """
 Check that the pipeline worked end to end: wait until SOAR-Lite holds an
 incident from every tool, then upload SOAR-Lite's demo logs and emails
-through "Analyze logs" and check they became incidents.
+through "Analyze logs" and check they became incidents. Last, check that
+the live console saw each step happen.
 
     python3 verify.py [--timeout SECONDS] [--url http://localhost:8000]
+                      [--console http://localhost:8080]
 
 Exits 0 when every expected incident arrived, 1 otherwise (used by CI).
 """
@@ -62,9 +64,50 @@ def check_analyze(url, deadline):
     return all(ok for _, ok in checks)
 
 
+def console_events(url):
+    """Every event the live console has collected so far."""
+    events, after = [], 0
+    while True:
+        page = get(f"{url}/api/events?after={after}")
+        events += page["events"]
+        after = page["last"]
+        if after >= page["head"]:
+            return events
+
+
+def check_console(url):
+    """The live console must have seen the scan, both rules firing, the signed alerts and the incidents."""
+    def seen(events):
+        fired = {e.get("sid") for e in events if e["stage"] == "sensor" and e["kind"] == "alert"}
+        return [
+            ("Console: scanner output shown", any(e["stage"] == "scan" and e["kind"] == "line" for e in events)),
+            ("Console: both Suricata rules seen firing", {1000001, 1000002} <= fired),
+            ("Console: signed alerts seen accepted",
+             sum(e["stage"] == "sensor" and e["kind"] == "webhook" and bool(e.get("ok")) for e in events) >= 2),
+            ("Console: incidents seen in SOAR-Lite", any(e["stage"] == "soar" and e["kind"] == "incident" for e in events)),
+        ]
+
+    events, checks = [], seen([])
+    for _ in range(10):         # the console reads the lab a moment behind it
+        try:
+            events = console_events(url)
+        except (OSError, ValueError, KeyError):
+            events = []
+        checks = seen(events)
+        if all(ok for _, ok in checks):
+            break
+        time.sleep(2)
+    for label, ok in checks:
+        print(f"  {'✓' if ok else '✗'} {label}")
+    packets = sum(e["stage"] == "tap" and e["kind"] == "packet" for e in events)
+    print(f"  · Console: {packets} packets shown" if packets else "  · Console: no packet view on this machine (detection is not affected)")
+    return all(ok for _, ok in checks)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:8000")
+    parser.add_argument("--console", default="http://localhost:8080", help="the live console; '' to skip its checks")
     parser.add_argument("--timeout", type=int, default=600)
     args = parser.parse_args()
 
@@ -96,8 +139,9 @@ def main():
     found = SCANNER_IP in iocs
     print(f"  {'✓' if found else '✗'} {'Scanner address ' + SCANNER_IP + ' extracted as an IOC':<48}")
     analyzed = check_analyze(args.url, deadline)
+    watched = check_console(args.console) if args.console else True
     print(f"\n{len(get(f'{args.url}/api/incidents/?limit=500'))} incidents in SOAR-Lite.")
-    return 0 if found and analyzed else 1
+    return 0 if found and analyzed and watched else 1
 
 
 if __name__ == "__main__":

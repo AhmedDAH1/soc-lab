@@ -1,8 +1,8 @@
 name: CI
 
 # Runs the whole lab on every push and checks every incident arrives in
-# SOAR-Lite, so a change in any of the four projects that breaks the
-# pipeline is caught here.
+# SOAR-Lite and that the live console saw each step, so a change in any of
+# the four projects that breaks the pipeline is caught here.
 on:
   push:
   pull_request:

@@ -10,7 +10,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && git clone --depth 1 --branch "$NETSCAN_VERSION" https://github.com/AhmedDAH1/network-scanner.git /netscan
 
-COPY entrypoint.sh forward.py /sensor/
+COPY entrypoint.sh forward.py labevents.py sniff.py /sensor/
 RUN chmod +x /sensor/entrypoint.sh
 ENV PYTHONUNBUFFERED=1
 ENTRYPOINT ["/sensor/entrypoint.sh"]

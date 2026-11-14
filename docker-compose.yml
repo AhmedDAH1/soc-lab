@@ -8,6 +8,10 @@
 #                                   └──► email-api (Email Threat Analyzer)
 #   Every incident then goes to AI triage, when a model is configured (README).
 #
+#   console: the live view on http://localhost:8080. Every tool reports what it
+#   is doing to the shared "lab" volume and the console shows it; with
+#   ./lab.sh --watch the attacks wait there until you start them.
+#
 # Each project is built from its GitHub release, so the lab runs exactly the
 # published code. Start it with ./lab.sh (which creates the webhook secret).
 
@@ -15,13 +19,39 @@ name: soc-lab
 
 x-secret: &secret ${WEBHOOK_SECRET:?Run ./lab.sh, or create .env with WEBHOOK_SECRET=<random value>}
 
+# ./lab.sh --watch sets LAB_STEP=1: the three attack steps then wait for the console
+x-step: &step ${LAB_STEP:-0}
+
 networks:
   lab:
     ipam:
       config:
         - subnet: 172.28.0.0/24
 
+volumes:
+  lab:      # what each tool reports to the console; holds no secret
+
 services:
+  # ── Watch ───────────────────────────────────────────────────────
+  console:
+    build: ./console
+    init: true                    # stop at once on `docker compose down`
+    environment:
+      SOAR_URL: http://soar:8000
+      LAB_STEP: *step
+    volumes:
+      - lab:/lab
+    ports:
+      - "127.0.0.1:8080:8080"     # live view, on your machine only
+    networks:
+      lab:
+        ipv4_address: 172.28.0.40
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   # ── Respond ─────────────────────────────────────────────────────
   soar:
     build: https://github.com/AhmedDAH1/soar-lite.git#v3.2.0
@@ -58,17 +88,26 @@ services:
   # ── The network being scanned, and the sensor watching it ──────
   target:
     build: ./target
+    init: true
+    volumes:
+      - lab:/lab
     networks:
       lab:
         ipv4_address: 172.28.0.10
+    depends_on:
+      console:
+        condition: service_healthy
 
   sensor:
     build: ./sensor
+    init: true
     network_mode: "service:target"   # sees every packet to and from the target
     cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
     environment:
       SOAR_URL: http://soar:8000
       SOAR_WEBHOOK_SECRET: *secret
+    volumes:
+      - lab:/lab
     depends_on:
       target:
         condition: service_started
@@ -83,7 +122,15 @@ services:
   # ── Attack ──────────────────────────────────────────────────────
   scanner:
     build: https://github.com/AhmedDAH1/network-scanner.git#v2.3.0
+    # steps/run-step.sh runs the command and copies its output to the console
+    init: true
+    entrypoint: ["sh", "/steps/run-step.sh", "scan"]
     command: ["python3", "scanner_cli.py", "-t", "172.28.0.10", "-p", "1-100", "--vuln", "--no-api"]
+    environment:
+      LAB_STEP: *step
+    volumes:
+      - lab:/lab
+      - ./steps:/steps:ro
     cap_add: [NET_RAW, NET_ADMIN]    # raw packets; never --privileged
     networks:
       lab:
@@ -109,22 +156,40 @@ services:
   # ── Detect: the other two tools, on their bundled sample data ──
   logs:
     build: https://github.com/AhmedDAH1/log_threat_detector.git#v1.3.0
+    init: true
+    entrypoint: ["sh", "/steps/run-step.sh", "logs", "python3", "main.py"]
     command: ["--all", "--severity", "HIGH", "--forward", "http://soar:8000"]
     environment:
       SOAR_WEBHOOK_SECRET: *secret
+      LAB_STEP: *step
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - lab:/lab
+      - ./steps:/steps:ro
     networks: [lab]
     depends_on:
       soar:
+        condition: service_healthy
+      console:
         condition: service_healthy
     restart: "no"
 
   email:
     build: https://github.com/AhmedDAH1/email-threat-analyzer.git#v1.3.0
+    init: true
+    entrypoint: ["sh", "/steps/run-step.sh", "email"]
     command: ["python3", "main.py", "samples/phishing_test.eml", "--forward", "http://soar:8000"]
     environment:
       SOAR_WEBHOOK_SECRET: *secret
+      LAB_STEP: *step
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - lab:/lab
+      - ./steps:/steps:ro
     networks: [lab]
     depends_on:
       soar:
+        condition: service_healthy
+      console:
         condition: service_healthy
     restart: "no"
