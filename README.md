@@ -57,9 +57,14 @@ result:
   ✓ Log Threat Detector: SSH brute force             incident #2
   ✓ Email Threat Analyzer: phishing verdict          incident #1
   ✓ Scanner address 172.28.0.20 extracted as an IOC
-  ✓ Analyze logs: brute force + port scan correlated 9 incidents from 6 files
-  ✓ Analyze logs: phishing emails opened incidents   9 incidents from 6 files
-  · AI triage: deepseek-flash (strict mode)
+  ✓ Analyze logs: brute force + port scan correlated 9 incidents from 6 files, uploaded through the console
+  ✓ Analyze logs: phishing emails opened incidents   9 incidents from 6 files, uploaded through the console
+  · AI triage: deepseek-v4.1-flash-1017 (strict mode)
+  ✓ Console: scanner output shown
+  ✓ Console: both Suricata rules seen firing
+  ✓ Console: signed alerts seen accepted
+  ✓ Console: incidents seen in SOAR-Lite
+  · Console: 220 packets shown
 
 20 incidents in SOAR-Lite.
 ```
