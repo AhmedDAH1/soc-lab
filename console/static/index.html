@@ -15,7 +15,7 @@
   </div>
   <nav class="bar-links" aria-label="Lab tools">
     <a id="soar-link" href="http://localhost:8000" target="_blank" rel="noopener">Open SOAR-Lite</a>
-    <a id="analyze-link" href="http://localhost:8000/analyze" target="_blank" rel="noopener">Analyze your own logs</a>
+    <button id="upload-link" type="button" class="linkish">Upload your own files</button>
   </nav>
 </header>
 
@@ -31,9 +31,10 @@
 </main>
 
 <footer class="foot">
-  <p>Everything on this page is read from the running lab: the tools' own output, the packets on the target's interface, Suricata's alerts and SOAR-Lite's incident API. The console holds no secret and cannot create an incident.</p>
+  <p>Everything on this page is read from the running lab: the tools' own output, the packets on the target's interface, Suricata's alerts and SOAR-Lite's incident API. The console holds no secret and cannot sign an alert: files you upload go through SOAR-Lite's own Analyze endpoint, like its Analyze page.</p>
 </footer>
 
+<input type="file" id="file-input" multiple accept=".log,.txt,.eml,.msg,text/plain,message/rfc822" hidden>
 <script src="/console.js"></script>
 </body>
 </html>

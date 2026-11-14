@@ -31,6 +31,7 @@ const M = {
   rules: [], alerts: [], webhooks: [], targetEvents: [],
   incidents: new Map(), triage: new Map(), asked: new Set(), lane: new Map(),
   forged: [],
+  uploads: [], pending: [], uploadAi: false, picking: null,
   selected: "scan", open: {}, changed: new Set(["all"]),
 };
 
@@ -43,6 +44,8 @@ const LANES = [
     blurb: "Email Threat Analyzer scores a sample phishing email: who it claims to be from, where its links really go, what is attached. It sends its verdict to SOAR-Lite as a signed alert." },
   { id: "forge", name: "Forge an alert", go: "Send a forged alert",
     blurb: "An attacker who can reach SOAR-Lite would like to plant fake alerts, or bury a real one under noise. This console does not have the webhook secret, so it is in the attacker's position: it sends one alert with no signature and one signed with a guessed secret." },
+  { id: "upload", name: "Upload your own files", go: "Choose files",
+    blurb: "Your own logs and emails, through the same pipeline. The console hands them to SOAR-Lite, which sends each log to Log Threat Detector and each email to Email Threat Analyzer, then opens an incident for every threat they find. Nothing else in the lab runs." },
 ];
 const lane = (id) => LANES.find((l) => l.id === id);
 
@@ -50,7 +53,7 @@ function touch(...parts) { for (const p of parts) M.changed.add(p); }
 
 function reset() {
   Object.assign(M, { cursor: 0, live: false, lines: { scan: [], logs: [], email: [] }, packets: [], tapFull: false,
-    rules: [], alerts: [], webhooks: [], targetEvents: [], forged: [] });
+    rules: [], alerts: [], webhooks: [], targetEvents: [], forged: [], uploads: [] });
   M.incidents.clear(); M.triage.clear(); M.asked.clear(); M.lane.clear();
   touch("all");
 }
@@ -79,6 +82,15 @@ function take(e) {
     M.forged.push(e); pulse("forge", "unsigned");
     if (e.accepted && e.incident_id) M.lane.set(e.incident_id, "forge");
     touch("forge");
+  } else if (stage === "upload" && kind === "start") {
+    M.uploads.push({ run: e.run, start: e, result: null });
+    pulse("upload", "files"); light("st-detectors"); touch("upload", "soar");
+  } else if (stage === "upload" && kind === "result") {
+    const u = M.uploads.find((x) => x.run === e.run);
+    if (u) u.result = e; else M.uploads.push({ run: e.run, start: null, result: e });
+    for (const id of e.incident_ids || []) M.lane.set(id, "upload");
+    if ((e.incident_ids || []).length) pulse("upload", "found");
+    touch("upload", "soar");
   } else if (LANES.some((l) => l.id === stage)) { touch(stage); }
   if (M.lines[stage] && (kind === "start" || kind === "requested")) touch(stage);
 }
@@ -116,7 +128,18 @@ const incidentsOf = (laneId) => [...M.incidents.values()].filter((i) => M.lane.g
 const step = (id) => (M.state && M.state.steps[id]) || { status: "idle", run: 0 };
 const soarUp = () => !!(M.state && M.state.soar.up);
 
+const uploading = () => !!(M.state && M.state.uploading);
+const detectorsUp = () => !!(M.state && M.state.detectors && M.state.detectors.logs && M.state.detectors.email);
+
 function laneStatus(id) {
+  if (id === "upload") {
+    if (uploading()) return ["running", "Analysing your files"];
+    const last = M.uploads.length ? M.uploads[M.uploads.length - 1].result : null;
+    if (!last) return ["", M.pending.length ? `${plural(M.pending.length, "file")} ready to analyse` : "Nothing uploaded yet"];
+    if (!last.ok) return ["running", "The last upload failed"];
+    const made = (last.incident_ids || []).length;
+    return ["done", made ? `Done: ${plural(made, "incident")} opened` : "Done: no threats found"];
+  }
   if (id === "forge") {
     if (!M.forged.length) return ["", "Not tried yet"];
     const refused = M.forged.filter((f) => !f.accepted).length;
@@ -134,6 +157,7 @@ function blocked(id) {
   if (!M.state) return "Connecting";
   if (!soarUp()) return "SOAR-Lite is still starting";
   if (id === "scan" && !M.state.sensor_ready) return "Suricata is still starting";
+  if (id === "upload") return uploading() ? "Analysing" : detectorsUp() ? null : "The detectors are still starting";
   if (id !== "forge" && ["running", "requested"].includes(step(id).status)) return "Running";
   return null;
 }
@@ -151,6 +175,8 @@ function buildMap() {
            station("st-suricata", "detect", "Suricata", "sensor with NetScan's rules"), link("signed last", "signed alert")],
     logs: [station("st-logs", "detect", "Log Threat Detector", "SSH, web and firewall logs"), link("signed last", "signed alerts")],
     email: [station("st-email", "detect", "Email Threat Analyzer", "one sample phishing email"), link("signed last", "signed alert")],
+    upload: [station("st-files", "upload", "Your files", "logs and emails you choose"), link("files", "uploaded"),
+             station("st-detectors", "detect", "The detectors", "Log Threat Detector, Email Threat Analyzer"), link("found last", "each threat found")],
     forge: [station("st-forger", "forger", "Someone without the secret", "this console"), link("unsigned last", "unsigned alert", el("em", { text: "refused" }))],
   };
   const lanes = $("lanes");
@@ -181,10 +207,10 @@ function drawMap() {
     const status = row.querySelector(".lane-status");
     status.className = "lane-status " + cls; status.textContent = text;
     const button = row.querySelector(".go"), why = blocked(l.id);
-    const again = l.id === "forge" ? M.forged.length > 0 : step(l.id).run > 0;
+    const again = l.id === "forge" ? M.forged.length > 0 : l.id === "upload" ? M.uploads.length > 0 : step(l.id).run > 0;
     button.disabled = !!why;
     button.className = "go" + (again ? " again" : "");
-    button.textContent = why || (again ? "Run it again" : l.go);
+    button.textContent = why || (l.id === "upload" ? (again ? "Upload more files" : l.go) : again ? "Run it again" : l.go);
   }
   const f = scanFacts();
   setCount("st-netscan", f.sent.length ? `${plural(f.sent.length, "probe")} sent` : "");
@@ -195,6 +221,10 @@ function drawMap() {
     setCount("st-" + id, made ? `${plural(made, "alert")} sent` : step(id).status === "running" ? "working" : "");
   }
   setCount("st-forger", M.forged.length ? `${plural(M.forged.length, "attempt")}` : "");
+  const sent = M.uploads.reduce((n, u) => n + (u.start ? u.start.files.length : 0), 0);
+  setCount("st-files", sent ? `${plural(sent, "file")} sent` : M.pending.length ? `${plural(M.pending.length, "file")} chosen` : "");
+  const found = M.uploads.reduce((n, u) => n + (u.result && u.result.ok ? (u.result.incident_ids || []).length : 0), 0);
+  setCount("st-detectors", uploading() ? "reading your files" : M.uploads.length ? `${plural(found, "threat")} found` : detectorsUp() ? "ready" : "starting");
   const refusedLink = document.querySelector(".link.unsigned");
   refusedLink.classList.toggle("refused", M.forged.some((x) => !x.accepted));
 
@@ -202,10 +232,10 @@ function drawMap() {
   box.setAttribute("aria-current", String(M.selected === "soar"));
   const total = M.incidents.size;
   $("soar-count").replaceChildren(soarUp() ? String(total) : "", el("small", { text: soarUp() ? (total === 1 ? "incident" : "incidents") : "starting" }));
-  const split = [["scan", "from Suricata"], ["logs", "from the log detector"], ["email", "from the email analyzer"]]
+  const split = [["scan", "from Suricata"], ["logs", "from the log detector"], ["email", "from the email analyzer"], ["upload", "from your files"]]
     .map(([id, label]) => [incidentsOf(id).length, label]);
   const other = total - split.reduce((n, [c]) => n + c, 0);
-  if (other > 0) split.push([other, "from elsewhere (uploads)"]);
+  if (other > 0) split.push([other, "from SOAR-Lite's Analyze page"]);
   $("soar-split").replaceChildren(...split.filter(([c]) => c).map(([c, label]) => el("li", {}, el("i", { text: c }), label)));
   const ai = M.state && M.state.ai;
   $("soar-ai").replaceChildren(...(ai && ai.configured
@@ -213,7 +243,6 @@ function drawMap() {
     : ["AI triage is off. The README shows how to turn it on."]));
   if (M.state) {
     $("soar-link").href = M.state.soar.url;
-    $("analyze-link").href = M.state.soar.url + "/analyze";
     $("mode-line").textContent = M.state.mode === "step"
       ? "Step-by-step mode: nothing attacks until you start it. Pick a lane, press its button and watch the evidence arrive below."
       : "Automatic mode: every step already ran once when the lab started. Pick a lane to see what happened, or run it again.";
@@ -453,11 +482,128 @@ function soarStory() {
     incidentSection(all, 8, "inc-all") || empty("Run a lane to create the first incident."), !all.length)];
 }
 
+/* ── Lane 5: your own files ──────────────────────────────── */
+const MAX_FILES = 20, MAX_BYTES = 5 * 1024 * 1024;
+const EMAIL_HEADER = /^(from|to|subject|received|return-path|message-id|mime-version):/gim;
+const kindOf = (name, text) => /\.(eml|msg)$/i.test(name) || ((text.slice(0, 4000).match(EMAIL_HEADER) || []).length >= 3 && text.includes("\n\n")) ? "email" : "log";
+const size = (n) => n < 1024 ? `${n} bytes` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const pendingBytes = () => M.pending.reduce((n, f) => n + f.bytes, 0);
+
+async function addFiles(list) {
+  select("upload");
+  const problems = [];
+  for (const file of [...list]) {
+    if (file.size > MAX_BYTES) { problems.push(`${file.name} is bigger than 5 MB.`); continue; }
+    const text = await file.text();
+    if (text.includes("\u0000")) { problems.push(`${file.name} is not a text file. Logs and .eml emails are text.`); continue; }
+    const bytes = new TextEncoder().encode(text).length;
+    const existing = M.pending.findIndex((f) => f.name === file.name);
+    if (existing >= 0) M.pending.splice(existing, 1);
+    if (M.pending.length >= MAX_FILES) { problems.push(`At most ${MAX_FILES} files at a time.`); break; }
+    if (pendingBytes() + bytes > MAX_BYTES) { problems.push(`${file.name} would take the upload past 5 MB.`); continue; }
+    M.pending.push({ name: file.name, content: text, bytes, kind: kindOf(file.name, text), lines: text ? text.split("\n").filter((l) => l.trim()).length : 0 });
+  }
+  notice(problems.join(" "));
+  touch("upload", "all"); draw();
+}
+
+async function sendUpload() {
+  if (!M.pending.length || uploading()) return;
+  const files = M.pending.map((f) => ({ name: f.name, content: f.content }));
+  try {
+    await post("/api/upload", { files, triage: !!(M.uploadAi && M.state && M.state.ai && M.state.ai.configured) });
+    M.pending = []; notice("");
+  } catch (e) { notice(`Upload: ${e.message}`); }
+  touch("upload", "all"); poll();
+}
+
+function dropZone() {
+  const zone = el("div", { class: "drop", role: "button", tabindex: "0", "aria-label": "Choose files to upload",
+    on: {
+      click: () => $("file-input").click(),
+      keydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file-input").click(); } },
+      dragover: (e) => { e.preventDefault(); zone.classList.add("over"); },
+      dragleave: () => zone.classList.remove("over"),
+      drop: (e) => { e.preventDefault(); e.stopPropagation(); zone.classList.remove("over"); addFiles(e.dataTransfer.files); },
+    } },
+    el("b", { text: "Drop your logs and emails here, or click to choose them" }),
+    el("span", { text: "SSH auth logs, Apache or Nginx access logs, UFW firewall logs, .eml emails. Up to 20 files, 5 MB in total." }));
+  return zone;
+}
+
+function pendingView() {
+  if (!M.pending.length) return null;
+  const ai = M.state && M.state.ai;
+  const rows = M.pending.map((f, i) => el("tr", {},
+    el("td", { class: "wide", text: f.name }), el("td", { text: f.kind === "email" ? "email" : "log" }),
+    el("td", { text: f.kind === "email" ? "" : plural(f.lines, "line") }), el("td", { text: size(f.bytes) }),
+    el("td", {}, el("button", { class: "more", type: "button", text: "Remove", on: { click: () => { M.pending.splice(i, 1); touch("upload", "all"); draw(); } } }))));
+  const count = M.pending.length;
+  return el("div", { class: "pending" },
+    el("div", { class: "scroll-x" }, el("table", { class: "pk files" },
+      el("thead", {}, el("tr", {}, ["file", "goes to", "", "size", ""].map((h, i) => el("th", { text: i === 1 ? "goes to" : h })))),
+      el("tbody", {}, rows))),
+    el("p", { class: "note", text: "Logs go to Log Threat Detector and emails to Email Threat Analyzer. SOAR-Lite decides by the same test." }),
+    ai && ai.configured ? el("label", { class: "ai-choice" },
+      el("input", { type: "checkbox", checked: M.uploadAi, on: { change: (e) => { M.uploadAi = e.target.checked; } } }),
+      ` Send every incident to the AI straight away (one request to ${ai.model} per incident). Otherwise you can ask about each one below.`) : null,
+    el("div", { class: "send-row" },
+      el("button", { class: "go send", type: "button", disabled: uploading() || !detectorsUp(),
+        text: uploading() ? "Analysing" : !detectorsUp() ? "The detectors are still starting" : `Analyse ${plural(count, "file")}`, on: { click: sendUpload } }),
+      el("button", { class: "more", type: "button", text: "Clear the list", on: { click: () => { M.pending = []; notice(""); touch("upload", "all"); draw(); } } })));
+}
+
+function resultView(u) {
+  const r = u.result, files = (u.start && u.start.files) || [];
+  const head = el("p", { class: "note" }, u.start ? `Upload ${u.run} at ${clock(u.start.ts)}: ${plural(files.length, "file")}` : `Upload ${u.run}`,
+    u.start && u.start.triage ? ", sent to the AI" : "", r && r.ok ? `, analysed in ${r.seconds} s.` : ".");
+  if (!r) {
+    return el("div", { class: "upload-run" }, head, el("table", { class: "pk files" },
+      el("tbody", {}, files.map((f) => el("tr", {}, el("td", { class: "wide", text: f.name }),
+        el("td", { text: f.kind === "email" ? "Email Threat Analyzer" : "Log Threat Detector" }), el("td", { class: "miss", text: "reading" }))))));
+  }
+  if (!r.ok) return el("div", { class: "upload-run" }, head, el("div", { class: "req-answer no", text: `SOAR-Lite answered ${r.status || "nothing"}: ${r.error}` }));
+  const rows = (r.files || []).map((f) => {
+    let found, cls = null, help = "";
+    if (f.kind === "email") { found = f.verdict || ""; cls = f.detections ? "hit" : "miss"; help = f.detections ? "an incident" : "clean: no incident"; }
+    else if (f.kind === "correlation") { found = plural(f.detections, "linked attack"); cls = "hit"; help = "the same address in several files"; }
+    else {
+      found = plural(f.detections || 0, "detection"); cls = f.detections ? "hit" : "miss";
+      help = !f.entries ? "not recognised as SSH, web or firewall log lines" : f.detections ? "" : "read, but nothing crossed a limit";
+    }
+    return el("tr", {}, el("td", { class: "wide", text: f.name }),
+      el("td", { text: f.kind === "email" ? "Email Threat Analyzer" : f.kind === "correlation" ? "Log Threat Detector" : (f.type || "not recognised") }),
+      el("td", { text: f.kind === "log" ? plural(f.entries || 0, "line") + " read" : "" }),
+      el("td", { class: cls, text: found }), el("td", { class: "miss wide", text: help }));
+  });
+  return el("div", { class: "upload-run" }, head, el("div", { class: "scroll-x" }, el("table", { class: "pk files" },
+    el("thead", {}, el("tr", {}, ["file", "read by", "", "found", ""].map((h) => el("th", { text: h })))), el("tbody", {}, rows))));
+}
+
+function uploadStory() {
+  const runs = [...M.uploads].reverse(), list = incidentsOf("upload");
+  const latest = runs[0];
+  const incs = incidentSection(list.slice().reverse(), 6, "inc-upload");
+  return [
+    section("Your files", "", "Choose what to analyse",
+      "Only these files are analysed. The lab's own attacks and sample logs stay where they are, waiting for their buttons.",
+      [dropZone(), pendingView()]),
+    section("The detectors", "detect", latest && latest.result && latest.result.ok ? "What the detectors found" : "The detectors read each file",
+      "Each file goes to the tool that understands it. A log gives one detection per attack pattern; an email gives one verdict.",
+      runs.length ? [...runs.slice(0, 3).map(resultView), runs.length > 3 ? el("p", { class: "note", text: `${runs.length - 3} earlier uploads are not shown.` }) : null]
+        : empty("Nothing uploaded yet."), !runs.length),
+    section("SOAR-Lite", "soar", list.length ? `SOAR-Lite opened ${plural(list.length, "incident")} from your files` : "SOAR-Lite opens an incident for each threat",
+      "Newest first. Each one has its indicators pulled out, and can go to the AI.",
+      incs || empty(latest && latest.result && latest.result.ok ? "No threats in the files you uploaded, so no incident." : "No incident from your files yet."), !incs),
+  ];
+}
+
 const STORIES = {
   scan: scanStory,
   logs: () => toolStory("logs", "Log Threat Detector", "The detector reads the logs", "Its own output: each finding, the address behind it and how many log lines prove it.", "Not run yet. Press “Analyse the logs” in lane 2."),
   email: () => toolStory("email", "Email Threat Analyzer", "The analyzer scores the email", "Its own report: the score out of 100 and every sign of phishing it found.", "Not run yet. Press “Analyse the email” in lane 3."),
   forge: forgeStory,
+  upload: uploadStory,
   soar: soarStory,
 };
 
@@ -486,8 +632,8 @@ function draw() {
 function select(id) { if (M.selected !== id) { M.selected = id; touch("all"); draw(); } }
 
 /* ── Talking to the console server ───────────────────────── */
-async function post(path) {
-  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Lab-Console": "1" }, body: "{}" });
+async function post(path, body) {
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Lab-Console": "1" }, body: JSON.stringify(body || {}) });
   const reply = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(reply.error || `The console answered ${response.status}`);
   return reply;
@@ -496,6 +642,7 @@ async function post(path) {
 function notice(text) { const n = $("notice"); n.hidden = !text; n.textContent = text || ""; }
 
 async function run(id) {
+  if (id === "upload") { select("upload"); $("file-input").click(); return; }
   select(id);
   try { await post(id === "forge" ? "/api/forge" : `/api/run/${id}`); notice(""); }
   catch (e) { notice(e.message); }
@@ -533,6 +680,11 @@ async function poll() {
 }
 
 buildMap();
+$("file-input").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+$("upload-link").addEventListener("click", () => { select("upload"); $("detail").scrollIntoView({ behavior: "smooth" }); });
+// A file dropped anywhere on the page goes to lane 5, instead of the browser opening it
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
 draw();
 poll();
 setInterval(poll, 600);

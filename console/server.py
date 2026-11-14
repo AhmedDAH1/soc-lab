@@ -10,6 +10,8 @@ What it can do is deliberately small:
   * write a run number to /lab/go/<step>, which the waiting tool picks up
   * send  SOAR-Lite a forged alert, to show that it is refused
   * ask   SOAR-Lite to run AI triage on one incident, when you click for it
+  * pass  files you upload to SOAR-Lite's Analyze endpoint, the same one its
+          Analyze page uses, and show what the detectors made of them
 
 It has no access to Docker and does not hold the webhook secret, so it cannot
 create an incident itself: the forged-alert step proves that.
@@ -50,6 +52,12 @@ PAGE_FILES = {
 ALLOWED_HOSTS = {f"{name}:{PORT}" for name in ("localhost", "127.0.0.1", "[::1]")} | {
     h.strip() for h in os.environ.get("LAB_CONSOLE_HOSTS", "").split(",") if h.strip()}
 
+MAX_UPLOAD_FILES = 20                      # SOAR-Lite's own limits for an upload
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_REQUEST_BYTES = 3 * MAX_UPLOAD_BYTES   # JSON escaping makes the request bigger than the files
+MAX_NAME = 120
+EMAIL_HEADER = re.compile(r"^(from|to|subject|received|return-path|message-id|mime-version):", re.I | re.M)
+
 MAX_EVENTS = 60000
 MAX_BATCH = 3000
 MAX_LINE = 400
@@ -71,6 +79,9 @@ class Lab:
         self.ai = None
         self.sensor_ready = False
         self.tap = None
+        self.detectors = {"logs": False, "email": False}
+        self.uploading = False
+        self.uploads = 0
         self.started = time.time()
 
     def add(self, stage, kind, ts=None, **data):
@@ -113,6 +124,8 @@ class Lab:
                     "ai": self.ai,
                     "sensor_ready": self.sensor_ready,
                     "tap": self.tap,
+                    "detectors": dict(self.detectors),
+                    "uploading": self.uploading,
                 },
             }
 
@@ -263,6 +276,9 @@ def watch_soar():
                 code, ai = soar("/api/triage/status")
                 if code == 200 and isinstance(ai, dict):
                     lab.ai = {k: ai.get(k) for k in ("configured", "model", "mode", "local", "problem")}
+                code, tools = soar("/api/analyze/status")
+                if code == 200 and isinstance(tools, dict):
+                    lab.detectors = {k: bool((tools.get(k) or {}).get("up")) for k in ("logs", "email")}
                 last_ai = time.time()
         time.sleep(1)
 
@@ -320,6 +336,71 @@ def forge():
                                body=payload, status=status, detail=str(detail)[:300], accepted=accepted,
                                incident_id=reply.get("incident_id") if accepted and isinstance(reply, dict) else None))
     return 200, {"results": results}
+
+
+def looks_like_email(name, content):
+    """The same test SOAR-Lite uses to send a file to the email analyzer instead of the log detector."""
+    if name.lower().endswith((".eml", ".msg")):
+        return True
+    return len(EMAIL_HEADER.findall(content[:4000])) >= 3 and "\n\n" in content
+
+
+def check_upload(data):
+    """The files and the AI choice from an upload request, or the reason it can't be sent."""
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, list) or not files:
+        return None, "Choose at least one file."
+    if len(files) > MAX_UPLOAD_FILES:
+        return None, f"At most {MAX_UPLOAD_FILES} files at a time."
+    clean_files, total = [], 0
+    for f in files:
+        if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not isinstance(f.get("content"), str):
+            return None, "Each file needs a name and its text."
+        name = os.path.basename(f["name"].replace("\\", "/")).strip()[:MAX_NAME] or "file"
+        total += len(f["content"].encode("utf-8", errors="replace"))
+        clean_files.append({"name": name, "content": f["content"]})
+    if total > MAX_UPLOAD_BYTES:
+        return None, "The files are too big together: 5 MB at most."
+    return (clean_files, data.get("triage") is True), None
+
+
+def upload(data):
+    """Start analysing uploaded files in the background; the page follows along through events."""
+    checked, problem = check_upload(data)
+    if problem:
+        return 400, {"error": problem}
+    files, triage = checked
+    with lab.lock:
+        if lab.uploading:
+            return 409, {"error": "The last upload is still being analysed."}
+        lab.uploading = True
+        lab.uploads += 1
+        run = lab.uploads
+    lab.add("upload", "start", run=run, triage=triage, files=[{
+        "name": f["name"], "bytes": len(f["content"].encode("utf-8", errors="replace")),
+        "lines": f["content"].count("\n") + (0 if f["content"].endswith("\n") else 1) if f["content"] else 0,
+        "kind": "email" if looks_like_email(f["name"], f["content"]) else "log"} for f in files])
+    threading.Thread(target=analyse_upload, args=(run, files, triage), daemon=True).start()
+    return 202, {"run": run}
+
+
+def analyse_upload(run, files, triage):
+    started = time.time()
+    try:
+        status, reply = soar("/api/analyze/", {"files": files, "triage": triage}, timeout=200)
+        ok = status == 200 and isinstance(reply, dict)
+        if ok:
+            lab.add("upload", "result", run=run, ok=True, seconds=round(time.time() - started, 1), triage=triage,
+                    files=reply.get("files") or [], incidents=reply.get("incidents") or [],
+                    incident_ids=reply.get("incident_ids") or [])
+        else:
+            detail = reply.get("detail") if isinstance(reply, dict) else reply
+            if isinstance(detail, list):        # a validation error from FastAPI
+                detail = "; ".join(str(d.get("msg", d)) for d in detail[:3])
+            lab.add("upload", "result", run=run, ok=False, status=status,
+                    error=str(detail or "SOAR-Lite did not answer.")[:400])
+    finally:
+        lab.uploading = False
 
 
 def ask_ai(incident_id):
@@ -385,6 +466,18 @@ class Handler(BaseHTTPRequestHandler):
                 or (origin and origin != f"http://{self.headers.get('Host')}")):
             return self.reply(403, {"error": "Only the console page can do that."})
         parts = urlparse(self.path).path.strip("/").split("/")
+        if parts == ["api", "upload"]:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0 or length > MAX_REQUEST_BYTES:
+                return self.reply(413, {"error": "The files are too big together: 5 MB at most."})
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8", errors="replace"))
+            except ValueError:
+                return self.reply(400, {"error": "The upload was not readable."})
+            return self.reply(*upload(data))
         try:
             if len(parts) == 3 and parts[:2] == ["api", "run"] and parts[2] in STEPS:
                 return self.reply(*request_run(parts[2]))

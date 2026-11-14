@@ -32,15 +32,28 @@ def get(url):
         return json.load(response)
 
 
-def post(url, payload, timeout=120):
+def post(url, payload, timeout=120, headers=None):
     request = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                     headers={"Content-Type": "application/json"}, method="POST")
+                                     headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - local lab URL
         return json.load(response)
 
 
-def check_analyze(url, deadline):
-    """Upload the demo files the way the Analyze page does; both detection APIs must answer."""
+def upload_through_console(console, samples, deadline):
+    """Upload files the way lane 5 of the live console does, and wait for its result."""
+    run = post(f"{console}/api/upload", {"files": samples, "triage": False}, headers={"X-Lab-Console": "1"})["run"]
+    while time.time() < deadline:
+        for e in console_events(console):
+            if e["stage"] == "upload" and e["kind"] == "result" and e.get("run") == run:
+                if not e.get("ok"):
+                    raise OSError(e.get("error"))
+                return e
+        time.sleep(2)
+    raise OSError("the console did not report the upload's result in time")
+
+
+def check_analyze(url, deadline, console=None):
+    """Upload the demo files, through the live console when it runs; both detection APIs must answer."""
     status = {}
     while time.time() < deadline:
         try:
@@ -51,14 +64,18 @@ def check_analyze(url, deadline):
             pass
         time.sleep(3)
     samples = get(f"{url}/api/analyze/samples")
-    result = post(f"{url}/api/analyze/", {"files": samples, "triage": False})   # a check, not a demo: no AI calls
+    # a check, not a demo: no AI calls
+    if console:
+        result, route = upload_through_console(console, samples, deadline), "through the console"
+    else:
+        result, route = post(f"{url}/api/analyze/", {"files": samples, "triage": False}), "to SOAR-Lite"
     titles = [i["title"] for i in result["incidents"]]
     checks = [
         ("Analyze logs: brute force + port scan correlated", any("COORDINATED_ATTACK" in t for t in titles)),
         ("Analyze logs: phishing emails opened incidents", sum("[EMAIL_GATEWAY]" in t for t in titles) == 2),
     ]
     for label, ok in checks:
-        print(f"  {'✓' if ok else '✗'} {label:<48} {len(titles)} incidents from {len(samples)} files")
+        print(f"  {'✓' if ok else '✗'} {label:<48} {len(titles)} incidents from {len(samples)} files, uploaded {route}")
     ai = status.get("ai", {})
     print(f"  · AI triage: {ai.get('model') + ' (' + ai.get('mode', '') + ' mode)' if ai.get('configured') else 'off (see README to turn it on)'}")
     return all(ok for _, ok in checks)
@@ -138,7 +155,7 @@ def main():
     iocs = [ioc["value"] for ioc in get(f"{args.url}/api/incidents/{netscan['id']}")["iocs"]]
     found = SCANNER_IP in iocs
     print(f"  {'✓' if found else '✗'} {'Scanner address ' + SCANNER_IP + ' extracted as an IOC':<48}")
-    analyzed = check_analyze(args.url, deadline)
+    analyzed = check_analyze(args.url, deadline, args.console or None)
     watched = check_console(args.console) if args.console else True
     print(f"\n{len(get(f'{args.url}/api/incidents/?limit=500'))} incidents in SOAR-Lite.")
     return 0 if found and analyzed and watched else 1

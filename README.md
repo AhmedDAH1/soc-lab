@@ -74,7 +74,7 @@ http://localhost:8080 to see what just happened, step by step.
 ```
 
 This starts everything but holds the attacks, and opens the live console at
-**http://localhost:8080**. The console draws the pipeline as four lanes that
+**http://localhost:8080**. The console draws the pipeline as five lanes that
 all end in SOAR-Lite. Each lane has its own start button, and the evidence
 appears underneath as it happens:
 
@@ -90,6 +90,11 @@ appears underneath as it happens:
 4. **Forge an alert.** The console sends SOAR-Lite one alert with no
    signature and one signed with a guessed secret. Both are refused, and you
    see the request and the refusal next to each other.
+5. **Upload your own files.** Drop your own logs and emails on the page. You
+   see which tool reads each file, how many lines it understood, what it
+   found, and the incidents SOAR-Lite opened. Only your files are analysed:
+   lanes 1 to 3 keep waiting. Tick *Send every incident to the AI* to have
+   them triaged straight away, or ask about each one.
 
 With AI triage on, every incident card has an *Ask the AI* button. It sends
 that one incident to the model and shows the verdict, the reasons and the
@@ -99,15 +104,18 @@ How the console sees all this without being able to change it: each tool
 copies its output to a shared Docker volume, a packet tap in the sensor
 reports the traffic on the target's interface, and the console reads those
 files and SOAR-Lite's incident API. Starting a step means writing a run
-number to a file the waiting tool watches. The console has no access to
-Docker and does not hold the webhook secret, which is why lane 4 fails.
+number to a file the waiting tool watches. Uploaded files go through
+SOAR-Lite's own Analyze endpoint, the one its Analyze page uses. The console
+has no access to Docker and does not hold the webhook secret, which is why
+lane 4 fails.
 
 After a plain `./lab.sh`, the same console shows what already happened, and
 any lane can be run again.
 
 ## Analyze your own logs
 
-Open **http://localhost:8000/analyze**. Drop SSH auth logs, web server access
+Use lane 5 of the live console (above), or open
+**http://localhost:8000/analyze**. Drop SSH auth logs, web server access
 logs, firewall (UFW/iptables) logs or `.eml` emails, or press *Load demo
 files*, then *Analyze*:
 
@@ -206,8 +214,9 @@ The same Sigma rules, with their test data, are in
 - Everything runs on an isolated Docker network. Only the dashboard
   (`127.0.0.1:8000`) and the live console (`127.0.0.1:8080`) are published,
   on your machine only.
-- The live console can read what the tools report and can start a step. It
-  has no Docker access and no webhook secret. It only answers requests
+- The live console can read what the tools report, start a step, and pass
+  files you upload to SOAR-Lite's Analyze endpoint. It has no Docker access
+  and no webhook secret. It only answers requests
   addressed to `localhost`, and only its own page can start a step, so
   another website open in your browser can't reach it or trigger a scan.
   Everything it displays is treated as text an attacker may have written.
@@ -220,7 +229,8 @@ The same Sigma rules, with their test data, are in
 CI runs `./lab.sh` on every push and once a week, and fails unless every
 incident above arrives, the demo files uploaded through the Analyze page
 become incidents, and the live console saw the scan, both rules firing, the
-signed alerts and the incidents. It catches a change in any of the projects
+signed alerts and the incidents, and the demo files are uploaded through the
+console's lane 5. It catches a change in any of the projects
 that breaks the pipeline.
 
 ## Troubleshooting
