@@ -3,74 +3,18 @@
 [![CI](https://github.com/AhmedDAH1/soc-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/AhmedDAH1/soc-lab/actions/workflows/ci.yml)
 
 One command runs an attack, detects it and turns it into an incident, using
-the tools I built, each at its published release. Then you can upload your
-own logs and emails, and an AI model triages every incident, under rules an
-attacker can't talk it out of:
+the tools I built, each at its published release. A live console shows every
+step as it happens: you start each attack yourself and watch the packets, the
+rules firing, the signed alerts and the incidents. You can also upload your
+own logs and emails, and an AI model triages each incident, under rules an
+attacker can't talk it out of.
 
 ```bash
-./lab.sh            # run everything and check the result
-./lab.sh --watch    # hold the attacks, start each one yourself and watch it
+./lab.sh --watch    # hold the attacks, start each one yourself in the live console
+./lab.sh            # run everything at once and check the result (what CI runs)
 ```
 
-![The lab: NetScan scans a target, Suricata catches it with NetScan's own rules, and the alerts become incidents in SOAR-Lite with the scanner's address as an indicator](assets/soc-lab.gif)
-
-## What happens
-
-```mermaid
-flowchart LR
-    SC["📡 scanner<br/>NetScan"] -- "SYN scan, banner grab,<br/>HTTP probe" --> T["🎯 target<br/>web + SSH"]
-    SE["🛡️ sensor<br/>Suricata + NetScan rules"] -. "watches the target's<br/>network interface" .- T
-    SE -- "signed webhook" --> SO["🚀 soar<br/>SOAR-Lite"]
-    L["🚨 logs<br/>Log Threat Detector"] -- "signed webhook" --> SO
-    E["📧 email<br/>Email Threat Analyzer"] -- "signed webhook" --> SO
-    U["📂 your logs and emails"] -- "Analyze page" --> SO
-    SO -- "logs" --> LA["logs-api"]
-    SO -- "emails" --> EA["email-api"]
-    SO -- "each incident" --> AI["🤖 AI triage<br/>ai-alert-triage, strict mode"]
-```
-
-1. **SOAR-Lite** starts with a fresh webhook secret that `lab.sh` generates.
-2. **The target** runs a web server announcing Apache 2.4.49 and an SSH
-   service announcing OpenSSH 7.4p1. It's a decoy; nothing is actually
-   vulnerable.
-3. **The sensor** runs Suricata inside the target's network namespace, so it
-   sees every packet the target sends and receives, with NetScan's
-   [detection rules](https://github.com/AhmedDAH1/network-scanner/tree/main/detections).
-4. **NetScan** scans ports 1-100 on the target, reads the banners, matches
-   both versions to known CVEs and sends an HTTP probe.
-5. Suricata fires two rules: Scapy's default SYN packet (sid 1000001) and
-   NetScan's User-Agent (sid 1000002). The sensor signs each alert with
-   HMAC-SHA256 and sends it to SOAR-Lite.
-6. **Log Threat Detector** and **Email Threat Analyzer** analyse their bundled
-   sample data (SSH brute force, a port scan, a phishing email) and send their
-   findings the same way.
-7. In SOAR-Lite each alert becomes an incident, with its IP addresses,
-   domains and hashes extracted as indicators. The scanner's address,
-   `172.28.0.20`, is on the NetScan incidents.
-
-`lab.sh` waits until every expected incident has arrived and prints the
-result:
-
-```
-  ✓ NetScan caught by Suricata: packet fingerprint   incident #10
-  ✓ NetScan caught by Suricata: HTTP probe           incident #11
-  ✓ Log Threat Detector: SSH brute force             incident #2
-  ✓ Email Threat Analyzer: phishing verdict          incident #1
-  ✓ Scanner address 172.28.0.20 extracted as an IOC
-  ✓ Analyze logs: brute force + port scan correlated 9 incidents from 6 files, uploaded through the console
-  ✓ Analyze logs: phishing emails opened incidents   9 incidents from 6 files, uploaded through the console
-  · AI triage: deepseek-v4.1-flash-1017 (strict mode)
-  ✓ Console: scanner output shown
-  ✓ Console: both Suricata rules seen firing
-  ✓ Console: signed alerts seen accepted
-  ✓ Console: incidents seen in SOAR-Lite
-  · Console: 220 packets shown
-
-20 incidents in SOAR-Lite.
-```
-
-Then open the dashboard at http://localhost:8000, or the live console at
-http://localhost:8080 to see what just happened, step by step.
+![The live console: lane 1 scans the network and Suricata catches it, the log, email and forgery lanes run, and SOAR-Lite ends with 23 incidents, including 12 from uploaded files](assets/soc-lab-console.gif)
 
 ## Watch it step by step
 
@@ -116,6 +60,67 @@ lane 4 fails.
 
 After a plain `./lab.sh`, the same console shows what already happened, and
 any lane can be run again.
+
+## What happens
+
+```mermaid
+flowchart LR
+    SC["📡 scanner<br/>NetScan"] -- "SYN scan, banner grab,<br/>HTTP probe" --> T["🎯 target<br/>web + SSH"]
+    SE["🛡️ sensor<br/>Suricata + NetScan rules"] -. "watches the target's<br/>network interface" .- T
+    SE -- "signed webhook" --> SO["🚀 soar<br/>SOAR-Lite"]
+    L["🚨 logs<br/>Log Threat Detector"] -- "signed webhook" --> SO
+    E["📧 email<br/>Email Threat Analyzer"] -- "signed webhook" --> SO
+    U["📂 your logs and emails"] -- "console lane 5<br/>or Analyze page" --> SO
+    SO -- "logs" --> LA["logs-api"]
+    SO -- "emails" --> EA["email-api"]
+    SO -- "each incident" --> AI["🤖 AI triage<br/>ai-alert-triage, strict mode"]
+    C["🖥️ console<br/>live view, localhost:8080"] -. "start a step,<br/>show every result" .- SO
+```
+
+1. **SOAR-Lite** starts with a fresh webhook secret that `lab.sh` generates.
+2. **The target** runs a web server announcing Apache 2.4.49 and an SSH
+   service announcing OpenSSH 7.4p1. It's a decoy; nothing is actually
+   vulnerable.
+3. **The sensor** runs Suricata inside the target's network namespace, so it
+   sees every packet the target sends and receives, with NetScan's
+   [detection rules](https://github.com/AhmedDAH1/network-scanner/tree/main/detections).
+4. **NetScan** scans ports 1-100 on the target, reads the banners, matches
+   both versions to known CVEs and sends an HTTP probe.
+5. Suricata fires two rules: Scapy's default SYN packet (sid 1000001) and
+   NetScan's User-Agent (sid 1000002). The sensor signs each alert with
+   HMAC-SHA256 and sends it to SOAR-Lite.
+6. **Log Threat Detector** and **Email Threat Analyzer** analyse their bundled
+   sample data (SSH brute force, a port scan, a phishing email) and send their
+   findings the same way.
+7. In SOAR-Lite each alert becomes an incident, with its IP addresses,
+   domains and hashes extracted as indicators. The scanner's address,
+   `172.28.0.20`, is on the NetScan incidents.
+
+`lab.sh` waits until every expected incident has arrived and prints the
+result:
+
+![./lab.sh in a terminal: NetScan scans the target, Suricata catches it with NetScan's own rules, and the alerts become incidents in SOAR-Lite with the scanner's address as an indicator](assets/soc-lab.gif)
+
+```
+  ✓ NetScan caught by Suricata: packet fingerprint   incident #10
+  ✓ NetScan caught by Suricata: HTTP probe           incident #11
+  ✓ Log Threat Detector: SSH brute force             incident #2
+  ✓ Email Threat Analyzer: phishing verdict          incident #1
+  ✓ Scanner address 172.28.0.20 extracted as an IOC
+  ✓ Analyze logs: brute force + port scan correlated 9 incidents from 6 files, uploaded through the console
+  ✓ Analyze logs: phishing emails opened incidents   9 incidents from 6 files, uploaded through the console
+  · AI triage: deepseek-v4.1-flash-1017 (strict mode)
+  ✓ Console: scanner output shown
+  ✓ Console: both Suricata rules seen firing
+  ✓ Console: signed alerts seen accepted
+  ✓ Console: incidents seen in SOAR-Lite
+  · Console: 220 packets shown
+
+20 incidents in SOAR-Lite.
+```
+
+Then open the dashboard at http://localhost:8000, or the live console at
+http://localhost:8080 to see what just happened, step by step.
 
 ## Analyze your own logs
 
@@ -163,10 +168,12 @@ export TRIAGE_BASE_URL=http://host.docker.internal:11434/v1 TRIAGE_MODEL=qwen2.5
 ./lab.sh
 ```
 
-Starting the lab costs nothing: its own startup incidents and its automated
-upload check are not sent to the AI (set `AUTO_TRIAGE=true` to change that).
-Only files you analyse on the Analyze page are, about 9 requests for the demo
-files.
+Starting the lab costs nothing: its own incidents and its automated upload
+check are not sent to the AI (set `AUTO_TRIAGE=true` to change that). A
+request goes to the model only when you ask for one: each *Ask the AI* click
+in the console, each incident from files you upload with *Send every incident
+to the AI* ticked, and each incident from files analysed on SOAR-Lite's
+Analyze page. That is one request per incident, about 9 for the demo files.
 
 `TRIAGE_MODE` defaults to `strict`, the mode
 [ai-alert-triage](https://github.com/AhmedDAH1/ai-alert-triage#results)
@@ -231,12 +238,11 @@ The same Sigma rules, with their test data, are in
 
 ## Testing
 
-CI runs `./lab.sh` on every push and once a week, and fails unless every
-incident above arrives, the demo files uploaded through the Analyze page
-become incidents, and the live console saw the scan, both rules firing, the
-signed alerts and the incidents, and the demo files are uploaded through the
-console's lane 5. It catches a change in any of the projects
-that breaks the pipeline.
+CI runs `./lab.sh` on every push and once a week. The run fails unless every
+incident above arrives, the demo files uploaded through the console's lane 5
+become incidents, and the console saw each step: the scan, both rules firing,
+the signed alerts and the incidents. So a change in any of the projects that
+breaks the pipeline fails the build.
 
 ## Troubleshooting
 
